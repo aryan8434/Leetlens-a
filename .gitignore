@@ -1,0 +1,14 @@
+node_modules/
+.env
+.env.*
+!.env.example
+
+frontend/node_modules/
+backend/node_modules/
+
+frontend/dist/
+backend/dist/
+
+.DS_Store
+Thumbs.db
+.vscode/
