@@ -16,6 +16,7 @@ dotenv.config({ path: path.join(__dirname, ".env") });
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const FRONTEND_BUILD_DIR = path.join(__dirname, "build");
 const FRONTEND_DIST_DIR = path.join(__dirname, "dist");
 const LEGACY_PUBLIC_DIR = path.join(__dirname, "public");
 const LEETCODE_GRAPHQL = "https://leetcode.com/graphql";
@@ -790,9 +791,11 @@ app.post("/api/coach", async (req, res) => {
 });
 
 const fs = require("fs");
-const frontendDir = fs.existsSync(path.join(FRONTEND_DIST_DIR, "index.html"))
-  ? FRONTEND_DIST_DIR
-  : LEGACY_PUBLIC_DIR;
+const frontendDir = fs.existsSync(path.join(FRONTEND_BUILD_DIR, "index.html"))
+  ? FRONTEND_BUILD_DIR
+  : fs.existsSync(path.join(FRONTEND_DIST_DIR, "index.html"))
+    ? FRONTEND_DIST_DIR
+    : LEGACY_PUBLIC_DIR;
 
 // Keep API misses as JSON instead of accidentally returning the frontend app.
 app.use("/api", (_req, res) => {
