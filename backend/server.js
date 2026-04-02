@@ -22,7 +22,7 @@ const LEGACY_PUBLIC_DIR = path.join(__dirname, "public");
 const LEETCODE_GRAPHQL = "https://leetcode.com/graphql";
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
-const FIRESTORE_IP_COLLECTION = "ip_searches";
+const FIRESTORE_USER_SEARCH_COLLECTION = "user_searches";
 
 app.set("trust proxy", true);
 app.use(cors());
@@ -44,9 +44,12 @@ function initFirestore() {
         admin.initializeApp({
           credential: admin.credential.cert(serviceAccount),
         });
-      } else {
+      } else if (process.env.NODE_ENV === 'production') {
         // In Cloud Run/Firebase managed runtimes, use attached service account.
         admin.initializeApp();
+      } else {
+        console.warn("Skipping backend Firestore logging: FIREBASE_SERVICE_ACCOUNT_JSON is not set in `.env`.");
+        return null;
       }
     }
     return admin.firestore();
@@ -153,20 +156,6 @@ function getDifficultyCount(source, difficulty) {
   return entry ? entry.count : 0;
 }
 
-function getClientIp(req) {
-  const xForwardedFor = req.headers["x-forwarded-for"];
-  if (typeof xForwardedFor === "string" && xForwardedFor.trim()) {
-    const first = xForwardedFor.split(",")[0].trim();
-    if (first) {
-      return first;
-    }
-  }
-
-  const candidate =
-    req.ip || req.socket?.remoteAddress || req.connection?.remoteAddress;
-  return (candidate || "unknown").toString();
-}
-
 function toDocSafeId(value) {
   return value.toString().trim().replaceAll("/", "_") || "unknown";
 }
@@ -175,39 +164,23 @@ function toUsernameDocId(username) {
   return username.toLowerCase().replace(/[^a-z0-9_-]/gi, "_");
 }
 
-async function logSearchInFirestore({ ipAddress, username }) {
+async function logSearchInFirestore({ username }) {
   if (!firestoreDb) {
     return;
   }
 
   const now = admin.firestore.FieldValue.serverTimestamp();
-  const ipDocId = toDocSafeId(ipAddress);
   const usernameDocId = toUsernameDocId(username);
 
-  const ipRef = firestoreDb.collection(FIRESTORE_IP_COLLECTION).doc(ipDocId);
-  const searchEventRef = ipRef.collection("searches").doc();
-  const usernameRef = ipRef.collection("usernames").doc(usernameDocId);
+  const userSearchRef = firestoreDb
+    .collection(FIRESTORE_USER_SEARCH_COLLECTION)
+    .doc(usernameDocId);
+  const userSearchEventRef = userSearchRef.collection("searches").doc();
 
   const batch = firestoreDb.batch();
 
   batch.set(
-    ipRef,
-    {
-      ipAddress,
-      firstSeenAt: now,
-      lastSeenAt: now,
-      totalSearches: admin.firestore.FieldValue.increment(1),
-    },
-    { merge: true },
-  );
-
-  batch.set(searchEventRef, {
-    username,
-    searchedAt: now,
-  });
-
-  batch.set(
-    usernameRef,
+    userSearchRef,
     {
       username,
       count: admin.firestore.FieldValue.increment(1),
@@ -216,6 +189,11 @@ async function logSearchInFirestore({ ipAddress, username }) {
     },
     { merge: true },
   );
+
+  batch.set(userSearchEventRef, {
+    username,
+    searchedAt: now,
+  });
 
   await batch.commit();
 }
@@ -695,12 +673,8 @@ app.get("/api/analyze", async (req, res) => {
   try {
     const analysis = await buildAnalysisData(username);
 
-    const ipAddress = getClientIp(req);
     try {
-      await logSearchInFirestore({
-        ipAddress,
-        username: analysis.username,
-      });
+      await logSearchInFirestore({ username: analysis.username });
     } catch (logError) {
       console.error("Failed to log search in Firestore:", logError.message);
     }

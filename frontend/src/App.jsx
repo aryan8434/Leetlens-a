@@ -1,5 +1,29 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
+import { UAParser } from "ua-parser-js";
 import "./App.css";
+import { db } from "./firebase";
+import { collection, addDoc, doc, setDoc, serverTimestamp } from "firebase/firestore";
+
+function getDailyDateFolder() {
+  const d = new Date();
+  const day = d.getDate();
+  const monthNames = ["January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"];
+  const month = monthNames[d.getMonth()];
+  const year = d.getFullYear();
+  return `${day} ${month} ${year}`;
+}
+
+function getVisitorId() {
+  let vid = localStorage.getItem("leetlens_visitor_id");
+  if (!vid) {
+    vid = typeof crypto !== 'undefined' && crypto.randomUUID 
+      ? crypto.randomUUID() 
+      : Math.random().toString(36).substring(2) + Date.now().toString(36);
+    localStorage.setItem("leetlens_visitor_id", vid);
+  }
+  return vid;
+}
 
 const REPORT_CACHE_KEY = "leetlensCoachReports_v2";
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").replace(
@@ -348,6 +372,54 @@ function App() {
   const [coachSavedAt, setCoachSavedAt] = useState("");
   const [showAllTopics, setShowAllTopics] = useState(false);
   const [showReportPage, setShowReportPage] = useState(false);
+  const hasLoggedVisit = useRef(false);
+
+  useEffect(() => {
+    if (hasLoggedVisit.current) return;
+    hasLoggedVisit.current = true;
+
+    const logVisit = async () => {
+      const vid = getVisitorId();
+      const dailyFolder = getDailyDateFolder();
+
+      let userIp = "unknown";
+      try {
+        const ipRes = await fetch("https://api.ipify.org?format=json");
+        const ipData = await ipRes.json();
+        userIp = ipData.ip;
+      } catch (err) {
+        // ignore
+      }
+
+      let deviceData = { vendor: "Unknown", model: "Unknown", os: "Unknown", browser: "Unknown", type: "Unknown" };
+      try {
+        const parser = new UAParser();
+        const result = parser.getResult();
+        deviceData = {
+          vendor: result.device.vendor || "Unknown",
+          model: result.device.model || "Unknown",
+          type: result.device.type || "desktop",
+          os: result.os.name ? `${result.os.name} ${result.os.version || ""}`.trim() : "Unknown",
+          browser: result.browser.name ? `${result.browser.name} ${result.browser.version || ""}`.trim() : "Unknown",
+        };
+      } catch (err) {
+        // ignore
+      }
+
+      try {
+        const docRef = doc(db, "user_searches", dailyFolder, "visitors", vid);
+        await setDoc(docRef, {
+          visitor_id: vid,
+          ip: userIp,
+          device: deviceData,
+          last_visited_at: serverTimestamp()
+        }, { merge: true });
+      } catch (e) {
+        console.warn("Could not log daily visit to Firestore:", e);
+      }
+    };
+    logVisit();
+  }, []);
 
   useEffect(() => {
     const targets = document.querySelectorAll(".reveal-on-scroll");
@@ -390,6 +462,21 @@ function App() {
     setCoachError("");
 
     try {
+      try {
+        const vid = getVisitorId();
+        const dailyFolder = getDailyDateFolder();
+        
+        await addDoc(collection(db, "user_searches", dailyFolder, "visitors", vid, "searches"), {
+          username: trimmed,
+          timestamp: serverTimestamp()
+        });
+      } catch (err) {
+        console.error("Error saving user to Firestore:", err);
+        alert("Firestore Error: Data didn't save.\n\n" + 
+              "Reason: " + err.message + "\n\n" +
+              "Fix: In your Firebase Console, ensure 'Firestore Database' is created and your Rules are set to allow read/writes!");
+      }
+
       const response = await fetch(
         toApiUrl(`/api/analyze?username=${encodeURIComponent(trimmed)}`),
       );

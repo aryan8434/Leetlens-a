@@ -1,5 +1,5 @@
 {
-  "name": "frontend",
+  "name": "admin",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -11,9 +11,9 @@
   },
   "dependencies": {
     "firebase": "^12.11.0",
+    "lucide-react": "^1.7.0",
     "react": "^19.2.4",
-    "react-dom": "^19.2.4",
-    "ua-parser-js": "^2.0.9"
+    "react-dom": "^19.2.4"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
