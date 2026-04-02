@@ -16,6 +16,8 @@ dotenv.config({ path: path.join(__dirname, ".env") });
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const FRONTEND_DIST_DIR = path.join(__dirname, "dist");
+const LEGACY_PUBLIC_DIR = path.join(__dirname, "public");
 const LEETCODE_GRAPHQL = "https://leetcode.com/graphql";
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
@@ -787,14 +789,25 @@ app.post("/api/coach", async (req, res) => {
   }
 });
 
-// Serve static files from public folder (React frontend)
-app.use(express.static(path.join(__dirname, "public")));
+const fs = require("fs");
+const frontendDir = fs.existsSync(path.join(FRONTEND_DIST_DIR, "index.html"))
+  ? FRONTEND_DIST_DIR
+  : LEGACY_PUBLIC_DIR;
 
-// SPA fallback: serve index.html for all non-API routes
+// Keep API misses as JSON instead of accidentally returning the frontend app.
+app.use("/api", (_req, res) => {
+  res.status(404).json({ error: "API route not found." });
+});
+
+// Serve static files from build output.
+app.use(express.static(frontendDir));
+
+// SPA fallback: serve index.html for all non-API routes.
 app.use((_req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html"));
+  res.sendFile(path.join(frontendDir, "index.html"));
 });
 
 app.listen(PORT, () => {
-  console.log(`API running on http://localhost:${PORT}`);
+  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`Frontend directory: ${frontendDir}`);
 });
