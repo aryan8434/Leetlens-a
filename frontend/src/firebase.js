@@ -1,6 +1,7 @@
 import { initializeApp } from "firebase/app";
 import { getAnalytics, isSupported } from "firebase/analytics";
 import { getFirestore } from "firebase/firestore";
+import { getAuth } from "firebase/auth";
 
 const firebaseConfig = {
   apiKey: "AIzaSyDntkrcYZH4iRvk94GdkLk-3gX2foDzx0I",
@@ -14,6 +15,7 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
+const auth = getAuth(app);
 
 let analytics = null;
 isSupported().then((supported) => {
@@ -22,4 +24,4 @@ isSupported().then((supported) => {
   }
 });
 
-export { app, analytics, db };
+export { app, analytics, db, auth };

@@ -1,14 +1,34 @@
 import { useEffect, useState, useRef } from "react";
 import { UAParser } from "ua-parser-js";
 import "./App.css";
+import { useAuth } from "./contexts/AuthContext";
+import AuthModal from "./components/AuthModal";
 import { db } from "./firebase";
-import { collection, addDoc, doc, setDoc, serverTimestamp } from "firebase/firestore";
+import {
+  collection,
+  addDoc,
+  doc,
+  setDoc,
+  serverTimestamp,
+} from "firebase/firestore";
 
 function getDailyDateFolder() {
   const d = new Date();
   const day = d.getDate();
-  const monthNames = ["January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December"];
+  const monthNames = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+  ];
   const month = monthNames[d.getMonth()];
   const year = d.getFullYear();
   return `${day} ${month} ${year}`;
@@ -17,9 +37,10 @@ function getDailyDateFolder() {
 function getVisitorId() {
   let vid = localStorage.getItem("leetlens_visitor_id");
   if (!vid) {
-    vid = typeof crypto !== 'undefined' && crypto.randomUUID 
-      ? crypto.randomUUID() 
-      : Math.random().toString(36).substring(2) + Date.now().toString(36);
+    vid =
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : Math.random().toString(36).substring(2) + Date.now().toString(36);
     localStorage.setItem("leetlens_visitor_id", vid);
   }
   return vid;
@@ -361,6 +382,18 @@ function buildHttpErrorMessage(response, payload, fallback) {
   return `${main}${details} [${statusLabel}]`;
 }
 
+function getUserInitials(user, profile) {
+  const source = profile?.name || user?.displayName || user?.email || "User";
+  const parts = source.trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) {
+    return "U";
+  }
+  if (parts.length === 1) {
+    return parts[0].slice(0, 2).toUpperCase();
+  }
+  return `${parts[0][0] || ""}${parts[1][0] || ""}`.toUpperCase();
+}
+
 function App() {
   const [username, setUsername] = useState("");
   const [loading, setLoading] = useState(false);
@@ -372,7 +405,36 @@ function App() {
   const [coachSavedAt, setCoachSavedAt] = useState("");
   const [showAllTopics, setShowAllTopics] = useState(false);
   const [showReportPage, setShowReportPage] = useState(false);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [showOutOfCreditsModal, setShowOutOfCreditsModal] = useState(false);
+  const [showProfilePage, setShowProfilePage] = useState(false);
+  const [showCreditsPage, setShowCreditsPage] = useState(false);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileError, setProfileError] = useState("");
+  const [profileSavedMessage, setProfileSavedMessage] = useState("");
+  const [purchaseLoadingKey, setPurchaseLoadingKey] = useState("");
+  const [purchaseMessage, setPurchaseMessage] = useState("");
+  const [purchaseError, setPurchaseError] = useState("");
+  const [profileForm, setProfileForm] = useState({
+    name: "",
+    email: "",
+    age: "",
+    location: "",
+    bio: "",
+  });
+  const {
+    currentUser,
+    credits,
+    profile,
+    logout,
+    refreshCredits,
+    refreshProfile,
+    saveProfile,
+    purchaseCredits,
+  } = useAuth();
   const hasLoggedVisit = useRef(false);
+  const profileMenuRef = useRef(null);
 
   useEffect(() => {
     if (hasLoggedVisit.current) return;
@@ -391,7 +453,13 @@ function App() {
         // ignore
       }
 
-      let deviceData = { vendor: "Unknown", model: "Unknown", os: "Unknown", browser: "Unknown", type: "Unknown" };
+      let deviceData = {
+        vendor: "Unknown",
+        model: "Unknown",
+        os: "Unknown",
+        browser: "Unknown",
+        type: "Unknown",
+      };
       try {
         const parser = new UAParser();
         const result = parser.getResult();
@@ -399,8 +467,12 @@ function App() {
           vendor: result.device.vendor || "Unknown",
           model: result.device.model || "Unknown",
           type: result.device.type || "desktop",
-          os: result.os.name ? `${result.os.name} ${result.os.version || ""}`.trim() : "Unknown",
-          browser: result.browser.name ? `${result.browser.name} ${result.browser.version || ""}`.trim() : "Unknown",
+          os: result.os.name
+            ? `${result.os.name} ${result.os.version || ""}`.trim()
+            : "Unknown",
+          browser: result.browser.name
+            ? `${result.browser.name} ${result.browser.version || ""}`.trim()
+            : "Unknown",
         };
       } catch (err) {
         // ignore
@@ -408,12 +480,16 @@ function App() {
 
       try {
         const docRef = doc(db, "user_searches", dailyFolder, "visitors", vid);
-        await setDoc(docRef, {
-          visitor_id: vid,
-          ip: userIp,
-          device: deviceData,
-          last_visited_at: serverTimestamp()
-        }, { merge: true });
+        await setDoc(
+          docRef,
+          {
+            visitor_id: vid,
+            ip: userIp,
+            device: deviceData,
+            last_visited_at: serverTimestamp(),
+          },
+          { merge: true },
+        );
       } catch (e) {
         console.warn("Could not log daily visit to Firestore:", e);
       }
@@ -448,6 +524,144 @@ function App() {
     };
   }, [analysis, showReportPage, coachReport]);
 
+  useEffect(() => {
+    if (!showReportPage || coachLoading || coachError) {
+      return;
+    }
+
+    const reportTargets = document.querySelectorAll(
+      ".report-page .reveal-on-scroll",
+    );
+    reportTargets.forEach((node) => node.classList.add("is-visible"));
+  }, [showReportPage, coachLoading, coachError, coachReport]);
+
+  useEffect(() => {
+    setProfileForm({
+      name: profile?.name || currentUser?.displayName || "",
+      email: profile?.email || currentUser?.email || "",
+      age:
+        profile?.age === null || profile?.age === undefined
+          ? ""
+          : String(profile.age),
+      location: profile?.location || "",
+      bio: profile?.bio || "",
+    });
+  }, [profile, currentUser]);
+
+  useEffect(() => {
+    if (!showProfileMenu) {
+      return undefined;
+    }
+
+    const onClickOutside = (event) => {
+      if (
+        profileMenuRef.current &&
+        !profileMenuRef.current.contains(event.target)
+      ) {
+        setShowProfileMenu(false);
+      }
+    };
+
+    document.addEventListener("mousedown", onClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", onClickOutside);
+    };
+  }, [showProfileMenu]);
+
+  const openProfilePage = async () => {
+    if (!currentUser) {
+      setShowAuthModal(true);
+      return;
+    }
+
+    setShowProfileMenu(false);
+    setShowProfilePage(true);
+    setShowCreditsPage(false);
+    setShowReportPage(false);
+    setProfileError("");
+    setProfileSavedMessage("");
+    setPurchaseMessage("");
+
+    try {
+      setProfileLoading(true);
+      await refreshProfile();
+    } catch (err) {
+      setProfileError(err.message || "Unable to load profile.");
+    } finally {
+      setProfileLoading(false);
+    }
+  };
+
+  const openCreditsPage = async () => {
+    if (!currentUser) {
+      setShowAuthModal(true);
+      return;
+    }
+
+    setShowProfileMenu(false);
+    setShowCreditsPage(true);
+    setShowProfilePage(false);
+    setShowReportPage(false);
+    setPurchaseMessage("");
+    setPurchaseError("");
+
+    try {
+      setProfileLoading(true);
+      await refreshProfile();
+    } catch (err) {
+      setPurchaseError(err.message || "Unable to load credits.");
+    } finally {
+      setProfileLoading(false);
+    }
+  };
+
+  const handleProfileInput = (event) => {
+    const { name, value } = event.target;
+    setProfileForm((prev) => ({
+      ...prev,
+      [name]: value,
+    }));
+  };
+
+  const handleSaveProfile = async (event) => {
+    event.preventDefault();
+    setProfileError("");
+    setProfileSavedMessage("");
+
+    try {
+      setProfileLoading(true);
+      await saveProfile({
+        name: profileForm.name,
+        email: profileForm.email,
+        age: profileForm.age === "" ? "" : Number(profileForm.age),
+        location: profileForm.location,
+        bio: profileForm.bio,
+      });
+      setProfileSavedMessage("Profile saved successfully.");
+    } catch (err) {
+      setProfileError(err.message || "Unable to save profile.");
+    } finally {
+      setProfileLoading(false);
+    }
+  };
+
+  const handlePurchaseCredits = async (packageKey) => {
+    setPurchaseError("");
+    setPurchaseMessage("");
+    setPurchaseLoadingKey(packageKey);
+
+    try {
+      const result = await purchaseCredits(packageKey);
+      setPurchaseMessage(
+        `Added ${result.addedCredits} credits successfully. New balance: ${result.credits}.`,
+      );
+    } catch (err) {
+      setPurchaseError(err.message || "Unable to add credits.");
+    } finally {
+      setPurchaseLoadingKey("");
+    }
+  };
+
   const handleAnalyze = async (event) => {
     event.preventDefault();
     const trimmed = username.trim();
@@ -465,16 +679,30 @@ function App() {
       try {
         const vid = getVisitorId();
         const dailyFolder = getDailyDateFolder();
-        
-        await addDoc(collection(db, "user_searches", dailyFolder, "visitors", vid, "searches"), {
-          username: trimmed,
-          timestamp: serverTimestamp()
-        });
+
+        await addDoc(
+          collection(
+            db,
+            "user_searches",
+            dailyFolder,
+            "visitors",
+            vid,
+            "searches",
+          ),
+          {
+            username: trimmed,
+            timestamp: serverTimestamp(),
+          },
+        );
       } catch (err) {
         console.error("Error saving user to Firestore:", err);
-        alert("Firestore Error: Data didn't save.\n\n" + 
-              "Reason: " + err.message + "\n\n" +
-              "Fix: In your Firebase Console, ensure 'Firestore Database' is created and your Rules are set to allow read/writes!");
+        alert(
+          "Firestore Error: Data didn't save.\n\n" +
+            "Reason: " +
+            err.message +
+            "\n\n" +
+            "Fix: In your Firebase Console, ensure 'Firestore Database' is created and your Rules are set to allow read/writes!",
+        );
       }
 
       const response = await fetch(
@@ -517,6 +745,17 @@ function App() {
   const formatPercent = (value) => `${value.toFixed(1)}%`;
 
   const handleCoachReport = async () => {
+    if (!currentUser) {
+      setShowAuthModal(true);
+      return;
+    }
+
+    if (credits <= 0) {
+      setCoachError("You have no credits remaining.");
+      setShowOutOfCreditsModal(true);
+      return;
+    }
+
     const trimmed = username.trim();
     if (!trimmed) {
       setCoachError("Please enter a username first.");
@@ -542,10 +781,12 @@ function App() {
     setShowReportPage(true);
 
     try {
+      const token = await currentUser.getIdToken();
       const response = await fetch(toApiUrl("/api/coach"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({ username: trimmed }),
       });
@@ -569,6 +810,8 @@ function App() {
       };
       saveReportCache(cache);
       setCoachSavedAt(savedAt);
+
+      await refreshCredits();
     } catch (coachFetchError) {
       setCoachReport("");
       setCoachError(
@@ -642,16 +885,225 @@ function App() {
 
   return (
     <main className="container">
-      <header className="brand-row">
-        <img src="/logo.png" alt="LeetLens logo" className="brand-logo" />
-        <h1 className="brand-wordmark">
-          <span className="leet">Leet</span>
-          <span className="lens">Lens</span>
-        </h1>
+      <header
+        className="brand-row"
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center" }}>
+          <img src="/logo.png" alt="LeetLens logo" className="brand-logo" />
+          <h1 className="brand-wordmark">
+            <span className="leet">Leet</span>
+            <span className="lens">Lens</span>
+          </h1>
+        </div>
+        <div>
+          {currentUser ? (
+            <div className="profile-menu-wrap" ref={profileMenuRef}>
+              <button
+                type="button"
+                className="profile-icon-btn"
+                onClick={() => setShowProfileMenu((value) => !value)}
+                title="Open profile menu"
+              >
+                {profile?.photoURL || currentUser?.photoURL ? (
+                  <img
+                    src={profile?.photoURL || currentUser?.photoURL}
+                    alt="Profile"
+                    className="profile-avatar"
+                  />
+                ) : (
+                  <span className="profile-initials">
+                    {getUserInitials(currentUser, profile)}
+                  </span>
+                )}
+              </button>
+
+              {showProfileMenu ? (
+                <div className="profile-dropdown">
+                  <button type="button" onClick={openProfilePage}>
+                    Profile
+                  </button>
+                  <button type="button" onClick={openCreditsPage}>
+                    Credits
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowProfileMenu(false);
+                      logout();
+                    }}
+                  >
+                    Log Out
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <button
+              onClick={() => setShowAuthModal(true)}
+              style={{
+                backgroundColor: "#3b82f6",
+                color: "#fff",
+                border: "none",
+                padding: "8px 20px",
+                borderRadius: "5px",
+                cursor: "pointer",
+                fontWeight: "bold",
+              }}
+            >
+              Log In
+            </button>
+          )}
+        </div>
       </header>
       <p className="subtitle">
         Track your problem solving progress and trends.
       </p>
+
+      {showProfilePage ? (
+        <section className="card profile-page">
+          <div className="profile-page-header">
+            <h2>Your Profile</h2>
+            <button
+              type="button"
+              className="close-report"
+              onClick={() => setShowProfilePage(false)}
+            >
+              Close
+            </button>
+          </div>
+
+          <form className="profile-form" onSubmit={handleSaveProfile}>
+            <label>
+              Name
+              <input
+                type="text"
+                name="name"
+                value={profileForm.name}
+                onChange={handleProfileInput}
+                placeholder="Your full name"
+              />
+            </label>
+
+            <label>
+              Email
+              <input
+                type="email"
+                name="email"
+                value={profileForm.email}
+                onChange={handleProfileInput}
+                placeholder="Your email"
+              />
+            </label>
+
+            <label>
+              Age
+              <input
+                type="number"
+                name="age"
+                min="0"
+                max="120"
+                value={profileForm.age}
+                onChange={handleProfileInput}
+                placeholder="Your age"
+              />
+            </label>
+
+            <label>
+              Location
+              <input
+                type="text"
+                name="location"
+                value={profileForm.location}
+                onChange={handleProfileInput}
+                placeholder="City, Country"
+              />
+            </label>
+
+            <label>
+              Bio
+              <textarea
+                name="bio"
+                rows="4"
+                value={profileForm.bio}
+                onChange={handleProfileInput}
+                placeholder="Tell us about yourself"
+              />
+            </label>
+
+            <div className="profile-actions">
+              <button type="submit" disabled={profileLoading}>
+                {profileLoading ? "Saving..." : "Save Profile"}
+              </button>
+            </div>
+          </form>
+
+          {profileError ? <p className="error">{profileError}</p> : null}
+          {profileSavedMessage ? (
+            <p className="saved-note">{profileSavedMessage}</p>
+          ) : null}
+        </section>
+      ) : null}
+
+      {showCreditsPage ? (
+        <section className="card profile-page">
+          <div className="profile-page-header">
+            <h2>Credits</h2>
+            <button
+              type="button"
+              className="close-report"
+              onClick={() => setShowCreditsPage(false)}
+            >
+              Close
+            </button>
+          </div>
+
+          <section className="credits-section">
+            <p className="credits-note">Current balance: {credits} credits</p>
+            <div className="credits-pack-grid">
+              <button
+                type="button"
+                className="credit-pack-btn"
+                disabled={purchaseLoadingKey !== ""}
+                onClick={() => handlePurchaseCredits("50_rs9")}
+              >
+                {purchaseLoadingKey === "50_rs9"
+                  ? "Adding..."
+                  : "50 Credits - Rs. 9"}
+              </button>
+              <button
+                type="button"
+                className="credit-pack-btn"
+                disabled={purchaseLoadingKey !== ""}
+                onClick={() => handlePurchaseCredits("150_rs19")}
+              >
+                {purchaseLoadingKey === "150_rs19"
+                  ? "Adding..."
+                  : "150 Credits - Rs. 19"}
+              </button>
+              <button
+                type="button"
+                className="credit-pack-btn"
+                disabled={purchaseLoadingKey !== ""}
+                onClick={() => handlePurchaseCredits("400_rs29")}
+              >
+                {purchaseLoadingKey === "400_rs29"
+                  ? "Adding..."
+                  : "400 Credits - Rs. 29"}
+              </button>
+            </div>
+          </section>
+
+          {purchaseError ? <p className="error">{purchaseError}</p> : null}
+          {purchaseMessage ? (
+            <p className="saved-note">{purchaseMessage}</p>
+          ) : null}
+        </section>
+      ) : null}
 
       <section className="card analyze-card">
         <h2>Analyze LeetCode Profile</h2>
@@ -1006,6 +1458,33 @@ function App() {
             </>
           ) : null}
         </section>
+      ) : null}
+
+      {showAuthModal && <AuthModal onClose={() => setShowAuthModal(false)} />}
+
+      {showOutOfCreditsModal ? (
+        <div
+          className="modal-overlay"
+          onClick={() => setShowOutOfCreditsModal(false)}
+        >
+          <div
+            className="credit-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3>Out of Credits</h3>
+            <p>
+              You have no credits left. Please contact admin to add more
+              credits.
+            </p>
+            <button
+              type="button"
+              className="coach-button"
+              onClick={() => setShowOutOfCreditsModal(false)}
+            >
+              Okay
+            </button>
+          </div>
+        </div>
       ) : null}
     </main>
   );

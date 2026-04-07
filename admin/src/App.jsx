@@ -5,7 +5,7 @@ import {
 } from "lucide-react";
 import { db } from "./firebase";
 import { 
-  collection, getDocs, collectionGroup, getCountFromServer 
+  collection, getDocs, collectionGroup, getCountFromServer, doc, updateDoc 
 } from "firebase/firestore";
 
 export default function App() {
@@ -18,6 +18,48 @@ export default function App() {
   const [folderVisitors, setFolderVisitors] = useState([]);
   const [loading, setLoading] = useState(false);
   const [expandedRows, setExpandedRows] = useState(new Set());
+
+  const [usersList, setUsersList] = useState([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+
+  useEffect(() => {
+    if (activeTab === "users") {
+      fetchUsers();
+    }
+  }, [activeTab]);
+
+  const fetchUsers = async () => {
+    setUsersLoading(true);
+    try {
+      const snap = await getDocs(collection(db, "registered_users"));
+      const u = [];
+      snap.forEach(doc => u.push({ id: doc.id, ...doc.data() }));
+      setUsersList(u);
+    } catch(err) {
+      console.error(err);
+    } finally {
+      setUsersLoading(false);
+    }
+  };
+
+  const updateCredits = async (userId, currentCredits) => {
+    const newCredsStr = prompt("Enter new credit amount:", currentCredits);
+    if (newCredsStr === null) return; // Cancelled
+    const newCreds = parseInt(newCredsStr, 10);
+    if (isNaN(newCreds)) {
+      alert("Invalid number.");
+      return;
+    }
+    
+    try {
+      await updateDoc(doc(db, "registered_users", userId), { credits: newCreds });
+      alert("Credits updated successfully!");
+      fetchUsers(); // Refresh
+    } catch(err) {
+      console.error(err);
+      alert("Failed to update credits. Check your Firestore rules.");
+    }
+  };
 
   useEffect(() => {
     const fetchMetrics = async () => {
@@ -233,6 +275,62 @@ export default function App() {
     </>
   );
 
+  const renderUsersTab = () => (
+    <>
+      <div className="page-header">
+        <h1>User Management</h1>
+        <p>Edit user credits and view placeholder payment history.</p>
+      </div>
+
+      {usersLoading ? (
+        <div className="loading-wrapper glass">
+          <Loader2 size={32} className="spinner" />
+          <p>Fetching users...</p>
+        </div>
+      ) : (
+        <div className="table-container glass">
+          <table>
+            <thead>
+              <tr>
+                <th>Email</th>
+                <th>Joined Date</th>
+                <th>Credits</th>
+                <th>Payments</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {usersList.length === 0 && (
+                <tr>
+                  <td colSpan="5" style={{ textAlign: "center", color: "var(--text-secondary)", padding: "32px" }}>
+                    No users registered yet.
+                  </td>
+                </tr>
+              )}
+              {usersList.map((usr) => (
+                <tr key={usr.id} className="table-row">
+                  <td>{usr.email || "N/A"}</td>
+                  <td>{usr.createdAt?.toDate ? usr.createdAt.toDate().toLocaleString() : "Unknown"}</td>
+                  <td><span style={{color: '#3b82f6', fontWeight: 'bold'}}>{usr.credits !== undefined ? usr.credits : 0}</span></td>
+                  <td>
+                    <button className="action-btn" onClick={() => alert("Payment history placeholder. No real data yet.\n\nTransactions:\n- 3 Credits (Sign up bonus) - $0.00")}>
+                      View Payments
+                    </button>
+                  </td>
+                  <td>
+                    <button className="action-btn" onClick={() => updateCredits(usr.id, usr.credits)} style={{color: '#a78bfa', marginLeft: '10px'}}>
+                      Edit Credits
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
+  );
+
   return (
     <div className="app-container">
       <aside className="sidebar">
@@ -242,16 +340,23 @@ export default function App() {
         </div>
         <nav className="nav-links">
           <button 
-            className={`nav-item ${!selectedFolder && activeTab === 'overview' ? 'active' : ''}`}
+            className={`nav-item ${activeTab === 'overview' ? 'active' : ''}`}
             onClick={() => { setSelectedFolder(null); setActiveTab("overview"); }}
           >
             <LayoutDashboard size={18} />
             Overview
           </button>
           <button 
-            className={`nav-item ${selectedFolder ? 'active' : ''}`}
-            disabled={!selectedFolder}
-            style={{ opacity: selectedFolder ? 1 : 0.5, cursor: selectedFolder ? 'pointer' : 'default' }}
+            className={`nav-item ${activeTab === 'users' ? 'active' : ''}`}
+            onClick={() => { setSelectedFolder(null); setActiveTab("users"); }}
+          >
+            <Users size={18} />
+            Users & Credits
+          </button>
+          <button 
+            className={`nav-item ${activeTab === 'folders' ? 'active' : ''}`}
+            disabled={!selectedFolder && activeTab !== 'folders'}
+            style={{ opacity: selectedFolder || activeTab === 'folders' ? 1 : 0.5, cursor: selectedFolder || activeTab === 'folders' ? 'pointer' : 'default' }}
           >
             <Folder size={18} />
             Day Details
@@ -260,7 +365,9 @@ export default function App() {
       </aside>
 
       <main className="main-content">
-        {!selectedFolder ? renderOverview() : renderFolderDetails()}
+        {activeTab === "overview" && renderOverview()}
+        {activeTab === "folders" && renderFolderDetails()}
+        {activeTab === "users" && renderUsersTab()}
       </main>
     </div>
   );
