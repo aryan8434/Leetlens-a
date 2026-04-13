@@ -73,6 +73,37 @@ function saveReportCache(cache) {
   }
 }
 
+function cleanReportLine(rawLine) {
+  if (!rawLine) {
+    return "";
+  }
+
+  return String(rawLine)
+    .replace(/^\s*#{1,6}\s*/, "")
+    .replace(/^\s*[-*+]\s+/, "")
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/__(.*?)__/g, "$1")
+    .replace(/`(.*?)`/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getSectionTitleFromLine(line) {
+  const numbered = line.match(/^\d+[.)]\s+(.+?)\s*:?$/);
+  if (numbered) {
+    return numbered[1];
+  }
+
+  const knownHeading = line.match(
+    /^(overall skill score|current insights|company readiness(?:\s*\(%\))?|topic breakdown|key weaknesses|improvement plan(?:\s*\([^)]*\))?|final verdict|estimated time to reach faang level)\s*:?$/i,
+  );
+  if (knownHeading) {
+    return knownHeading[1];
+  }
+
+  return null;
+}
+
 function parseReportSections(reportText) {
   if (!reportText) {
     return [];
@@ -86,11 +117,16 @@ function parseReportSections(reportText) {
   const sections = [];
   let current = null;
 
-  lines.forEach((line) => {
-    const headingMatch = line.match(/^\d+\.\s+\*{0,2}(.+?)\*{0,2}:?$/);
-    if (headingMatch) {
+  lines.forEach((rawLine) => {
+    const line = cleanReportLine(rawLine);
+    if (!line) {
+      return;
+    }
+
+    const sectionTitle = getSectionTitleFromLine(line);
+    if (sectionTitle) {
       current = {
-        title: headingMatch[1],
+        title: sectionTitle,
         items: [],
       };
       sections.push(current);
@@ -105,7 +141,7 @@ function parseReportSections(reportText) {
       sections.push(current);
     }
 
-    current.items.push(line.replace(/^[-*]\s*/, ""));
+    current.items.push(line);
   });
 
   return sections;
@@ -127,13 +163,12 @@ function findSection(sections, includesText) {
   );
 }
 
-function extractScore(scoreSection) {
-  if (!scoreSection) {
+function extractScore(reportText) {
+  if (!reportText) {
     return null;
   }
 
-  const allText = scoreSection.items.join(" ");
-  const match = allText.match(/\b(\d{1,3})\b/);
+  const match = reportText.match(/(?:SCORE\s*:?\s*)?(\d{1,3})(?:\/100|\s+out of 100|%)/i) || reportText.match(/\b(\d{1,3})\b/);
   if (!match) {
     return null;
   }
@@ -167,7 +202,8 @@ function getSectionTone(title) {
 }
 
 function renderLineWithHighlights(line) {
-  const tokens = line.split(
+  const cleanLine = cleanReportLine(line);
+  const tokens = cleanLine.split(
     /(Hard|hard|Medium|medium|Easy|easy|FAANG|Product-based|Service-based|strong|Strong|weak|Weak|\d+(?:\.\d+)?%)/,
   );
 
@@ -744,15 +780,9 @@ function App() {
 
   const formatPercent = (value) => `${value.toFixed(1)}%`;
 
-  const handleCoachReport = async () => {
+  const openSavedCoachReport = () => {
     if (!currentUser) {
       setShowAuthModal(true);
-      return;
-    }
-
-    if (credits <= 0) {
-      setCoachError("You have no credits remaining.");
-      setShowOutOfCreditsModal(true);
       return;
     }
 
@@ -766,28 +796,49 @@ function App() {
     const cache = loadReportCache();
     const saved = cache[cacheKey];
 
-    if (saved?.report) {
-      setCoachError("");
-      setCoachReport(saved.report);
-      setCoachSavedAt(saved.savedAt || "");
-      setShowReportPage(true);
+    if (!saved?.report) {
+      setCoachError(
+        "No saved AI evaluation found for this username. Generate a new report.",
+      );
       return;
     }
 
+    setCoachError("");
+    setCoachReport(saved.report);
+    setCoachSavedAt(saved.savedAt || "");
+    setShowReportPage(true);
+  };
+
+  const handleGenerateCoachReport = async () => {
+    if (currentUser && credits <= 0) {
+      setCoachError("You have no credits remaining.");
+      setShowOutOfCreditsModal(true);
+      return;
+    }
+
+    const trimmed = username.trim();
+    if (!trimmed) {
+      setCoachError("Please enter a username first.");
+      return;
+    }
+
+    const cacheKey = trimmed.toLowerCase();
+    const cache = loadReportCache();
+
     setCoachLoading(true);
     setCoachError("");
-    setCoachReport("");
-    setCoachSavedAt("");
     setShowReportPage(true);
 
     try {
-      const token = await currentUser.getIdToken();
+      const headers = { "Content-Type": "application/json" };
+      if (currentUser) {
+        const token = await currentUser.getIdToken();
+        headers.Authorization = `Bearer ${token}`;
+      }
+
       const response = await fetch(toApiUrl("/api/coach"), {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+        headers,
         body: JSON.stringify({ username: trimmed }),
       });
 
@@ -872,16 +923,9 @@ function App() {
     : [];
 
   const reportSections = parseReportSections(coachReport);
-  const scoreSection = findSection(reportSections, "overall skill score");
-  const insightsSection = findSection(reportSections, "current insights");
-  const readinessSection = findSection(reportSections, "company readiness");
-  const scoreValue = extractScore(scoreSection);
-  const remainingSections = reportSections.filter(
-    (section) =>
-      section !== scoreSection &&
-      section !== insightsSection &&
-      section !== readinessSection,
-  );
+  const displaySections = reportSections.filter(s => normalizeSectionTitle(s.title) !== "evaluation report" && normalizeSectionTitle(s.title) !== "overall skill score");
+  const scoreValue = extractScore(coachReport);
+  const hasSavedReport = Boolean(coachReport);
 
   return (
     <main className="container">
@@ -1263,18 +1307,27 @@ function App() {
               </p>
             ) : null}
 
-            <button
-              type="button"
-              className="coach-button"
-              onClick={handleCoachReport}
-              disabled={coachLoading}
-            >
-              {coachLoading
-                ? "Generating Report..."
-                : coachReport
-                  ? "Open Saved AI Evaluation"
-                  : "Generate AI Evaluation"}
-            </button>
+            <div className="coach-actions">
+              {hasSavedReport ? (
+                <button
+                  type="button"
+                  className="coach-button coach-button-secondary"
+                  onClick={openSavedCoachReport}
+                  disabled={coachLoading}
+                >
+                  Open Saved AI Evaluation
+                </button>
+              ) : null}
+
+              <button
+                type="button"
+                className="coach-button"
+                onClick={handleGenerateCoachReport}
+                disabled={coachLoading}
+              >
+                {coachLoading ? "Generating Report..." : "Generate New Report"}
+              </button>
+            </div>
           </section>
         </>
       ) : null}
@@ -1308,12 +1361,11 @@ function App() {
 
           {!coachLoading && !coachError && reportSections.length > 0 ? (
             <>
-              {scoreSection ? (
-                <article className="report-score-card reveal-on-scroll">
-                  <div className="report-score-badge">
-                    <span className="score-value">{scoreValue ?? "--"}</span>
-                    <span className="score-max">/100</span>
-                  </div>
+              <article className="report-score-card reveal-on-scroll">
+                <div className="report-score-badge">
+                  <span className="score-value">{!currentUser ? "XX" : (scoreValue ?? "--")}</span>
+                  <span className="score-max">/100</span>
+                </div>
                   <div className="report-score-copy">
                     <h3>Overall Skill Score</h3>
                     <p>
@@ -1322,114 +1374,86 @@ function App() {
                     </p>
                   </div>
                 </article>
-              ) : null}
 
-              <div className="report-priority-grid">
-                {insightsSection ? (
-                  <article className="report-section featured reveal-on-scroll">
-                    <h3 className="section-title section-title-insights">
-                      Current Insights
-                    </h3>
-                    <ul>
-                      {insightsSection.items.map((item, index) => (
-                        <li
-                          key={`insights-${index}`}
-                          style={{ "--item-index": index }}
-                        >
-                          {renderLineWithHighlights(item)}
-                        </li>
-                      ))}
-                    </ul>
-                  </article>
-                ) : null}
+              <div className="report-sections" style={{ position: "relative" }}>
+                {displaySections.map((section, index) => {
+                  const norm = normalizeSectionTitle(section.title);
+                  const isReadiness = norm.includes("company readiness");
+                  const isTopicBreakdown = norm.includes("topic breakdown");
+                  const tone = getSectionTone(section.title);
+                  const isInsights = tone === "insights";
 
-                {readinessSection ? (
-                  <article className="report-section featured readiness reveal-on-scroll">
-                    <h3 className="section-title section-title-readiness">
-                      Company Readiness (%)
-                    </h3>
-                    {(() => {
-                      const readinessRows = pairReadinessItems(
-                        readinessSection.items,
-                      );
-                      const avgReadiness = getAverageReadiness(readinessRows);
+                  const isBlurred = !currentUser && index > 1;
+                  const fadeOutItemsAfter = (!currentUser && index <= 1) ? 2 : Infinity;
 
-                      return (
-                        <>
-                          {avgReadiness !== null ? (
-                            <div className="readiness-average">
-                              <span className="readiness-average-label">
-                                Average Readiness
-                              </span>
-                              <span className="readiness-score-pill">
-                                {avgReadiness}
-                                <small>/100</small>
-                              </span>
-                            </div>
-                          ) : null}
-
-                          <div className="section-row-list">
-                            {readinessRows.map((row, index) => {
-                              const parsed = parseReadinessHeading(row.heading);
-                              return (
-                                <article
-                                  key={`readiness-${index}`}
-                                  className="section-item-card"
-                                  style={{ "--item-index": index }}
-                                >
-                                  <div className="section-item-headline">
-                                    <p className="section-item-heading">
-                                      {renderLineWithHighlights(parsed.label)}
-                                    </p>
-                                    {parsed.score !== null ? (
-                                      <span className="readiness-score-pill">
-                                        {parsed.score}
-                                        <small>/100</small>
-                                      </span>
-                                    ) : null}
-                                  </div>
-                                  {row.details ? (
-                                    <p className="section-item-details">
-                                      {renderLineWithHighlights(row.details)}
-                                    </p>
-                                  ) : null}
-                                </article>
-                              );
-                            })}
-                          </div>
-                        </>
-                      );
-                    })()}
-                  </article>
-                ) : null}
-              </div>
-
-              <div className="report-sections">
-                {remainingSections.map((section) => (
-                  <article
-                    key={section.title}
-                    className="report-section reveal-on-scroll"
-                  >
-                    <h3
-                      className={`section-title section-title-${getSectionTone(section.title)}`}
+                  return (
+                    <article
+                      key={`${section.title}-${index}`}
+                      className={`report-section reveal-on-scroll ${isReadiness ? "readiness" : ""} ${isInsights ? "featured" : ""} ${isBlurred ? "unauth-faded" : ""}`}
                     >
-                      {section.title}
-                    </h3>
-                    {normalizeSectionTitle(section.title).includes(
-                      "topic breakdown",
-                    ) ? (
-                      <div className="section-row-list">
-                        {pairHeadingDetailItems(section.items).map(
-                          (row, index) => (
+                      <h3 className={`section-title section-title-${tone}`}>
+                        <span className="section-label">Section {index + 1}</span>
+                        {section.title}
+                      </h3>
+                      {isReadiness ? (
+                        <div className="section-row-list">
+                          {(() => {
+                            const readinessRows = pairReadinessItems(section.items);
+                            const avgReadiness = getAverageReadiness(readinessRows);
+                            return (
+                              <>
+                                {avgReadiness !== null ? (
+                                  <div className={`readiness-average ${isBlurred ? "unauth-faded" : ""}`}>
+                                    <span className="readiness-average-label">
+                                      Average Readiness
+                                    </span>
+                                    <span className="readiness-score-pill">
+                                      {avgReadiness}
+                                      <small>/100</small>
+                                    </span>
+                                  </div>
+                                ) : null}
+                                {readinessRows.map((row, rIndex) => {
+                                  const parsed = parseReadinessHeading(row.heading);
+                                  return (
+                                    <article
+                                      key={`readiness-${rIndex}`}
+                                      className={`section-item-card ${rIndex >= fadeOutItemsAfter || isBlurred ? "unauth-faded" : ""}`}
+                                      style={{ "--item-index": rIndex }}
+                                    >
+                                      <div className="section-item-headline">
+                                        <p className="section-item-heading">
+                                          {renderLineWithHighlights(parsed.label)}
+                                        </p>
+                                        {parsed.score !== null ? (
+                                          <span className="readiness-score-pill">
+                                            {parsed.score}
+                                            <small>/100</small>
+                                          </span>
+                                        ) : null}
+                                      </div>
+                                      {row.details ? (
+                                        <p className="section-item-details">
+                                          {renderLineWithHighlights(row.details)}
+                                        </p>
+                                      ) : null}
+                                    </article>
+                                  );
+                                })}
+                              </>
+                            );
+                          })()}
+                        </div>
+                      ) : isTopicBreakdown ? (
+                        <div className="section-row-list">
+                          {pairHeadingDetailItems(section.items).map((row, rIndex) => (
                             <article
-                              key={`${section.title}-row-${index}`}
-                              className="section-item-card"
-                              style={{ "--item-index": index }}
+                              key={`${section.title}-row-${rIndex}`}
+                              className={`section-item-card ${rIndex >= fadeOutItemsAfter || isBlurred ? "unauth-faded" : ""}`}
+                              style={{ "--item-index": rIndex }}
                             >
                               <p className="section-item-heading">
-                                {renderLineWithHighlights(
-                                  stripTrailingColon(row.heading),
-                                )}
+                                {renderLineWithHighlights(stripTrailingColon(row.heading))}
                               </p>
                               {row.details ? (
                                 <p className="section-item-details">
@@ -1437,23 +1461,39 @@ function App() {
                                 </p>
                               ) : null}
                             </article>
-                          ),
-                        )}
-                      </div>
-                    ) : (
-                      <ul>
-                        {section.items.map((item, index) => (
-                          <li
-                            key={`${section.title}-${index}`}
-                            style={{ "--item-index": index }}
-                          >
-                            {renderLineWithHighlights(item)}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
+                          ))}
+                        </div>
+                      ) : (
+                        <ul>
+                          {section.items.map((item, iIndex) => (
+                            <li 
+                              key={`${section.title}-${iIndex}`} 
+                              style={{ "--item-index": iIndex }}
+                              className={iIndex >= fadeOutItemsAfter || isBlurred ? "unauth-faded" : ""}
+                            >
+                              {renderLineWithHighlights(item)}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </article>
+                  );
+                })}
+
+                {displaySections.length === 0 && Array.isArray(reportSections) && reportSections.length > 0 ? (
+                  <article className="report-section" style={{ minHeight: "300px", whiteSpace: "pre-wrap", color: "#cbd5e1" }}>
+                    <h3 className="section-title">Raw AI Evaluation</h3>
+                    {coachReport}
                   </article>
-                ))}
+                ) : null}
+
+                {!currentUser && (
+                  <div className="paywall-overlay">
+                    <button className="paywall-btn" onClick={() => setShowAuthModal(true)}>
+                      Login to Unlock Full AI Report
+                    </button>
+                  </div>
+                )}
               </div>
             </>
           ) : null}

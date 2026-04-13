@@ -124,6 +124,25 @@ async function verifyFirebaseToken(req, res, next) {
   }
 }
 
+async function optionalFirebaseToken(req, res, next) {
+  if (!isAuthSystemReady()) {
+    return next();
+  }
+
+  const token = getBearerToken(req);
+  if (!token) {
+    return next();
+  }
+
+  try {
+    const decoded = await admin.auth().verifyIdToken(token);
+    req.authUser = decoded;
+    return next();
+  } catch (_error) {
+    return next();
+  }
+}
+
 function getUserRef(uid) {
   return firestoreDb.collection(REGISTERED_USERS_COLLECTION).doc(uid);
 }
@@ -704,14 +723,22 @@ app.get("/api/analyze", async (req, res) => {
   }
 });
 
-app.post("/api/coach", verifyFirebaseToken, async (req, res) => {
+app.post("/api/coach", optionalFirebaseToken, async (req, res) => {
   const username = (req.body?.username || "").toString().trim();
   if (!username) {
     return res.status(400).json({ error: "Username is required." });
   }
 
   try {
-    await ensureUserDocument(req.authUser, req);
+    if (req.authUser) {
+      await ensureUserDocument(req.authUser, req);
+      const userRef = getUserRef(req.authUser.uid);
+      const snap = await userRef.get();
+      const credits = Number(snap.data()?.credits || 0);
+      if (credits <= 0) {
+        return res.status(402).json({ error: "You have no credits remaining." });
+      }
+    }
 
     const analysis = await buildAnalysisData(username);
     const prompt = buildCoachPrompt(analysis);
@@ -753,7 +780,10 @@ app.post("/api/coach", verifyFirebaseToken, async (req, res) => {
         .json({ error: "Groq returned an empty response." });
     }
 
-    const remainingCredits = await consumeOneCredit(req.authUser.uid);
+    let remainingCredits = 0;
+    if (req.authUser) {
+      remainingCredits = await consumeOneCredit(req.authUser.uid);
+    }
 
     return res.json({
       username: analysis.username,
