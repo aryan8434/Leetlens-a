@@ -89,16 +89,26 @@ function cleanReportLine(rawLine) {
 }
 
 function getSectionTitleFromLine(line) {
-  const numbered = line.match(/^\d+[.)]\s+(.+?)\s*:?$/);
-  if (numbered) {
-    return numbered[1];
+  const knownHeading = line.match(
+    /^(?:section\s*\d+\s*[:.-]\s*|\d+[.)]\s*)?(overall skill score|skill score|current insights|insights|company readiness(?:\s*\(%\))?|topic breakdown|key weaknesses|weaknesses|improvement plan(?:\s*\([^)]*\))?|7-day plan|plan|final verdict|verdict|estimated time to reach faang level)\s*:?$/i,
+  );
+
+  if (knownHeading) {
+    let raw = knownHeading[1].toLowerCase();
+    if (raw.includes("insight")) return "Current Insights";
+    if (raw.includes("skill score")) return "Overall Skill Score";
+    if (raw.includes("readiness")) return "Company Readiness";
+    if (raw.includes("topic")) return "Topic Breakdown";
+    if (raw.includes("weakness")) return "Key Weaknesses";
+    if (raw.includes("plan")) return "Improvement Plan";
+    if (raw.includes("verdict")) return "Final Verdict";
+    if (raw.includes("faang") || raw.includes("estimated time")) return "Estimated Time to Reach FAANG Level";
+    return knownHeading[1];
   }
 
-  const knownHeading = line.match(
-    /^(overall skill score|current insights|company readiness(?:\s*\(%\))?|topic breakdown|key weaknesses|improvement plan(?:\s*\([^)]*\))?|final verdict|estimated time to reach faang level)\s*:?$/i,
-  );
-  if (knownHeading) {
-    return knownHeading[1];
+  const numbered = line.match(/^(?:section\s*\d+\s*[:.-]\s*|\d+[.)]\s*)(.+?)\s*:?$/i);
+  if (numbered) {
+    return numbered[1];
   }
 
   return null;
